@@ -1,55 +1,83 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from chatbot import get_chatbot_response
+
 import threading
 import subprocess
-import os
-import json
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS to allow frontend requests
+CORS(app)  # Enable CORS for frontend requests
+
+# In-memory storage for emotions
+dominant_emotions = {}
 
 # Function to run the scheduler
 def run_scheduler(batch_number):
     try:
         # Call the scheduler script with the batch number
-        subprocess.run(["python", "D:\MoodSync\MoodSync\Backend\scheduler.py", str(batch_number)], check=True)
+        subprocess.run(["python", "D:/MoodSync/MoodSync/Backend/scheduler.py", str(batch_number)], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Error running scheduler: {e}")
+        print(f"Error running scheduler for batch {batch_number}: {e}")
 
 # Endpoint to start the session
 @app.route('/start-session', methods=['POST'])
 def start_session():
-    data = request.json  # Get JSON data from the frontend
-    batch_number = data.get("batch_number", 1)  # Default batch number is 1
+    data = request.json
+    batch_number = data.get("batch_number", 1)
 
-    # Run the scheduler in a separate thread
+    # Start the scheduler in a separate thread
     threading.Thread(target=run_scheduler, args=(batch_number,)).start()
 
     return jsonify({"status": f"Session started for batch {batch_number}"}), 200
 
+# Endpoint to set the dominant emotion (called by spark.py)
+@app.route('/set-dominant-emotion', methods=['POST'])
+def set_dominant_emotion():
+    data = request.json
+    print(f"Received from spark.py: {data}")  # Debugging log for incoming data
+    batch_number = data.get("batch_number")
+    dominant_emotion = data.get("dominant_emotion")
+    count = data.get("count")
+
+    if not batch_number or not dominant_emotion:
+        return jsonify({"error": "Invalid data received"}), 400
+
+    # Store the data in memory
+    dominant_emotions[batch_number] = {
+        "batch_number": batch_number,
+        "dominant_emotion": dominant_emotion,
+        "count": count
+    }
+    print(f"Stored dominant emotion for batch {batch_number}: {dominant_emotions[batch_number]}")
+    return jsonify({"status": "Dominant emotion stored successfully"}), 200
+
 # Endpoint to fetch the dominant emotion
 @app.route('/get-dominant-emotion', methods=['GET'])
 def get_dominant_emotion():
-    # Get the batch number from the query parameter
-    batch_number = request.args.get('batch_number', 1)  # Default batch number is 1
-    try:
-        # Define the path to the emotion file
-        emotion_file = f"D:/MoodSync/dominant_emotion_{batch_number}.json"
+    batch_number = int(request.args.get('batch_number', 1))
 
-        # Check if the emotion file exists
-        if not os.path.exists(emotion_file):
-            return jsonify({"error": f"No emotion data found for batch {batch_number}"}), 404
+    if batch_number not in dominant_emotions:
+        return jsonify({"error": f"No emotion data found for batch {batch_number}"}), 404
 
-        # Open and read the emotion data from the file
-        with open(emotion_file, "r") as f:
-            emotion_data = json.load(f)
+    print(f"Fetched dominant emotion for batch {batch_number}: {dominant_emotions[batch_number]}")  # Debug log
+    return jsonify(dominant_emotions[batch_number]), 200
 
-        # Return the emotion data as a JSON response
-        return jsonify(emotion_data), 200
+# Chatbot endpoint
+@app.route('/get-chat-response', methods=['POST'])
+def get_chat_response():
+    data = request.json
+    print(f"Chatbot triggered with emotion: {data}")  # Debug log
+    emotion = data.get("emotion")
 
-    except Exception as e:
-        # Return error message if something goes wrong
-        return jsonify({"error": "An error occurred while fetching emotion data", "details": str(e)}), 500
+    if not emotion:
+        return jsonify({"error": "Emotion not provided"}), 400
+
+    # Call the chatbot function
+    chatbot_response = get_chatbot_response(emotion)
+    print(f"Chatbot response: {chatbot_response}")  # Debug log
+
+    # Return the chatbot's response
+    return jsonify({"message": chatbot_response}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
